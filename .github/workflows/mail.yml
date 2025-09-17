@@ -1,0 +1,20 @@
+name: Send Email Test
+
+on:
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  send-mail:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send mail
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.163.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USER }}
+          password: ${{ secrets.MAIL_PASS }}
+          subject: "GitHub Actions 邮件测试"
+          to: ${{ secrets.MAIL_USER }}
+          from: GitHub Actions
+          body: "你好，这是一封来自 GitHub Actions 的测试邮件 ✉️"
