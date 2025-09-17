@@ -1,0 +1,34 @@
+name: Telegram Test
+
+on:
+  workflow_dispatch:   # 手动触发
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Send Telegram Test Message
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'EOF'
+          import os, requests
+
+          token = os.environ["TELEGRAM_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+          text = "✅ Telegram 测试成功！这是一条来自 GitHub Actions 的消息。"
+
+          url = f"https://api.telegram.org/bot{token}/sendMessage"
+          r = requests.post(url, data={"chat_id": chat_id, "text": text})
+          r.raise_for_status()
+          print("发送结果:", r.text)
+          EOF
