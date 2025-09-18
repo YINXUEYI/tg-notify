@@ -1,7 +1,7 @@
 name: Gate Futures Top5 (手动)
 
 on:
-  workflow_dispatch:  # 只手动触发，不定时
+  workflow_dispatch:  # 手动触发
 
 jobs:
   top5:
@@ -9,6 +9,12 @@ jobs:
     env:
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      MAIL_TO:    ${{ secrets.MAIL_TO }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,17 +29,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Fetch Gate futures top5 and send Telegram
+      - name: Fetch Gate futures top5 and notify TG + Email
         run: |
           python - <<'PY'
-          import os, requests, datetime
+          import os, requests, datetime, ssl, smtplib
+          from email.mime.text import MIMEText
+          from email.header import Header
 
           TG_TOKEN = os.environ["TELEGRAM_TOKEN"]
           TG_CHAT  = os.environ["TELEGRAM_CHAT_ID"]
 
+          # ---- 拉取Gate USDT永续24h行情 ----
           url = "https://api.gateio.ws/api/v4/futures/usdt/tickers"
-          r = requests.get(url, timeout=20)
-          r.raise_for_status()
+          r = requests.get(url, timeout=20); r.raise_for_status()
           data = r.json()
 
           def to_float(x):
@@ -59,12 +67,32 @@ jobs:
           for i, (chg, c, last) in enumerate(top5, 1):
             sign = "+" if chg>=0 else ""
             lines.append(f"{i}. {c:<12} {sign}{chg:.2f}%   现价: {last}")
-
           text = "\n".join(lines)
 
+          # ---- Telegram ----
           tg_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
           payload = {"chat_id": TG_CHAT, "text": text}
-          tr = requests.post(tg_url, data=payload, timeout=20)
-          tr.raise_for_status()
-          print("Telegram 发送成功：", tr.text)
+          tr = requests.post(tg_url, data=payload, timeout=20); tr.raise_for_status()
+          print("Telegram 发送成功。")
+
+          # ---- Email (SMTP SSL) ----
+          host = os.environ.get("SMTP_HOST")
+          port = int(os.environ.get("SMTP_PORT", "465"))
+          user = os.environ.get("SMTP_USER")
+          pwd  = os.environ.get("SMTP_PASS")
+          to   = os.environ.get("MAIL_TO")
+
+          if host and user and pwd and to:
+            msg = MIMEText(text, "plain", "utf-8")
+            msg["Subject"] = Header("Gate 永续合约 24h 涨幅Top5", "utf-8")
+            msg["From"] = user
+            msg["To"] = to
+
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as smtp:
+              smtp.login(user, pwd)
+              smtp.sendmail(user, [to], msg.as_string())
+            print("Email 发送成功。")
+          else:
+            print("Email 未发送：缺少 SMTP_* 或 MAIL_TO secrets。")
           PY
