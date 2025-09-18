@@ -25,21 +25,20 @@ HEADERS = {"Accept": "application/json"}
 session = requests.Session()
 session.headers.update(HEADERS)
 
-
 # ================== 可调参数（策略） ==================
 TOP_N_BY_CHANGE     = 60           # 先按24h涨幅挑前N个缩小范围
-MIN_24H_VOL_USDT    = 15_000_000   # 最低体量门槛：过滤假拉和僵尸币
+MIN_24H_VOL_USDT    = 0            # ✅ 体量无所谓：不再过滤体量
 CANDLES_INTERVAL    = "5m"
 CANDLES_LIMIT       = 288          # ≈24h 的 5m K 数
 
-# “新币”判定：首根K线距今 ≤ 14天
+# “新币”判定：首根K线距今 ≤ 14天（可自行调整/放宽）
 NEW_COIN_MAX_DAYS   = 14
 
 # 观察池（满足其一即可进入）
-OBS_ZF24_PCT        = 80.0         # 24h 涨幅 ≥ 80%
-OBS_ACCEL_EMA25     = 1.25         # last / EMA25 ≥ 1.25
+OBS_ZF24_PCT        = 50.0         # ✅ 24h 涨幅 ≥ 50%
+OBS_ACCEL_EMA25     = 1.25         # last / EMA25 ≥ 1.25（保留作为加速备选）
 
-# 触发组A（顶拐）：需全部满足
+# 顶拐信号（任意命中一个即可触发推送）
 WICK_RATIO_MIN      = 1.7          # 上影比 ≥ 1.7
 DROP_5M_PCT_MAX     = -2.5         # 5m 跌幅 ≤ -2.5%
 DROP_15M_PCT_MAX    = -5.0         # 15m 跌幅 ≤ -5%
@@ -51,14 +50,13 @@ MAX_ALERTS_PER_RUN  = 5
 # 白名单（只看这些；空=全市场）
 WHITELIST = set()
 
-# 黑名单：不监控的主流币（保留唯一一份，别重复定义）
+# 黑名单：不监控的主流币（保留唯一一份）
 BLACKLIST = {
     "BTC_USDT", "ETH_USDT", "BNB_USDT", "SOL_USDT", "XRP_USDT",
     "ADA_USDT", "DOGE_USDT", "TRX_USDT", "TON_USDT", "DOT_USDT",
-    # 如需补充： "LTC_USDT",
+    # 如需补充黑名单： "LTC_USDT",
 }
 # =====================================================
-
 
 # -------------------- Gate API --------------------
 def _get(url, params=None, timeout=15):
@@ -81,7 +79,6 @@ def get_candles(contract: str, interval=CANDLES_INTERVAL, limit=CANDLES_LIMIT):
     except Exception:
         pass
     return data
-
 
 # -------------------- 指标/工具 --------------------
 def parse_ohlcv(c):
@@ -112,7 +109,6 @@ def pct(a, b):
         return (a / b - 1.0) * 100.0
     except Exception:
         return 0.0
-
 
 # -------------------- 推送封装 --------------------
 def build_card_base(symbol, last, idx, mark, chg24, vol24,
@@ -181,7 +177,7 @@ def send_telegram_and_email(header, payload_json):
     to   = os.environ.get("MAIL_TO")
     if host and user and pwd and to:
         msg = MIMEText(f"{header}\n\n{payload_json}", "plain", "utf-8")
-        msg["Subject"] = Header("ShortCandidate (顶拐A)", "utf-8")
+        msg["Subject"] = Header("ShortCandidate (顶拐信号)", "utf-8")
         msg["From"] = user
         msg["To"] = to
         ctx = ssl.create_default_context()
@@ -192,12 +188,11 @@ def send_telegram_and_email(header, payload_json):
     else:
         print("[warn] 未设置 SMTP_* / MAIL_TO，跳过邮件。")
 
-
 # -------------------- 主流程（单次扫描） --------------------
 def main():
     tickers = get_futures_tickers()
 
-    # Ⅰ. 预筛：体量 + 黑/白名单 + 涨幅排序
+    # Ⅰ. 预筛：黑/白名单 + 涨幅排序（不看体量）
     pool = []
     for t in tickers:
         try:
@@ -216,18 +211,17 @@ def main():
             continue
         if WHITELIST and sym not in WHITELIST:
             continue
-        if vol24 < MIN_24H_VOL_USDT:
-            continue
 
         pool.append((sym, last, idx, mark, chg24, vol24, hi24, lo24))
 
+    # 只保留涨幅靠前的
     pool.sort(key=lambda x: x[4], reverse=True)
     pool = pool[:TOP_N_BY_CHANGE]
     print(f"[info] 预筛后进入观察的合约数: {len(pool)}")
 
     alerts = 0
 
-    # Ⅱ. 逐个深入：新币 + 观察池 + 顶拐A
+    # Ⅱ. 逐个深入：新币 + 观察池 + 顶拐信号（任一命中即推）
     for (sym, last, idx, mark, chg24, vol24, hi24, lo24) in pool:
         if alerts >= MAX_ALERTS_PER_RUN:
             break
@@ -248,7 +242,7 @@ def main():
                 o, h, l, cl, v, _ = parse_ohlcv(c)
                 opens.append(o); highs.append(h); lows.append(l); closes.append(cl); vols.append(v)
 
-            # 观察池规则：涨幅 or 加速
+            # 观察池规则：涨幅 or 加速（任意满足即可）
             ema25 = ema(closes, 25)
             accel_ok = False
             if ema25 and ema25[-1] > 0:
@@ -257,7 +251,7 @@ def main():
             if not (chg24 >= OBS_ZF24_PCT or accel_ok):
                 continue
 
-            # 顶拐A计算
+            # 顶拐信号（任意一个满足就算命中）
             chg_5m  = pct(closes[-1], closes[-2]) if len(closes) >= 2 else 0.0
             chg_15m = pct(closes[-1], closes[-4]) if len(closes) >= 4 else 0.0
 
@@ -267,26 +261,27 @@ def main():
             upper = max(0.0, h - max(cl, o))
             wick_ratio = upper / (body if body != 0 else 1e-9)
 
-            # 距24h高点百分比（优先tickers的high_24h，否则用最近288根高点）
+            # 距24h高点
             hi24_use = hi24 or (max(highs[-288:]) if len(highs) >= 10 else max(highs))
             dist_hi24 = pct(last, hi24_use)
 
+            # 构建信号（OR 逻辑）
             triggers = []
-            if (wick_ratio >= WICK_RATIO_MIN and
-                (chg_5m <= DROP_5M_PCT_MAX or chg_15m <= DROP_15M_PCT_MAX) and
-                abs(dist_hi24) <= DIST_TO_HI24_MAX):
-                triggers += ["wick_exhaustion", "near_24h_high"]
-                if chg_5m  <= DROP_5M_PCT_MAX:  triggers.append("drop_5m")
-                if chg_15m <= DROP_15M_PCT_MAX: triggers.append("drop_15m")
+            cond_wick = (wick_ratio >= WICK_RATIO_MIN)
+            cond_d5   = (chg_5m  <= DROP_5M_PCT_MAX)
+            cond_d15  = (chg_15m <= DROP_15M_PCT_MAX)
+            cond_near = (abs(dist_hi24) <= DIST_TO_HI24_MAX)
+
+            if cond_wick: triggers.append("wick_exhaustion")
+            if cond_d5:   triggers.append("drop_5m")
+            if cond_d15:  triggers.append("drop_15m")
+            if cond_near: triggers.append("near_24h_high")
 
             if not triggers:
                 continue  # ✅ 没命中就不发
 
-            # 置信度（先简单按命中项累加）
-            conf = 0.5
-            if "drop_5m" in triggers:  conf += 0.2
-            if "drop_15m" in triggers: conf += 0.2
-            if abs(dist_hi24) <= 0.8:   conf += 0.1
+            # 置信度：按命中数量简单累加，供你二次判断参考
+            conf = 0.4 + 0.15 * len(triggers)   # 命中越多，越接近1
             conf = min(1.0, conf)
 
             # 组卡发送
@@ -297,7 +292,7 @@ def main():
                 wick_ratio=wick_ratio, dist_hi24=dist_hi24,
                 triggers=triggers, conf=conf
             )
-            header = f"📉 做空候选（顶拐A）: {sym}"
+            header = f"📉 做空候选: {sym}  （新币{age_days:.1f}天 / 24h涨幅{chg24:.1f}%）"
             payload = json.dumps(card, ensure_ascii=False, separators=(",", ":"))
 
             send_telegram_and_email(header, payload)
@@ -305,12 +300,14 @@ def main():
             time.sleep(1.0)
 
         except Exception as e:
+            # 打印完整堆栈，方便定位
+            import traceback
             print(f"[warn] {sym} 处理异常: {e}")
+            traceback.print_exc()
 
     print(f"[done] 本轮触发 {alerts} 条。仅在命中条件时推送。")
 
-
 # -------------------- 入口 --------------------
 if __name__ == "__main__":
-    # 单次扫描；若想循环运行，交给定时器或 Actions 计划任务来触发
+    # 单次扫描；循环由定时任务/Actions 负责调度
     main()
