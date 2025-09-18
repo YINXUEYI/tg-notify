@@ -1,4 +1,4 @@
-name: Test ShortCandidate Signal (手动)
+name: Test ShortCandidate Signal
 
 on:
   workflow_dispatch:  # 手动触发
@@ -13,8 +13,12 @@ jobs:
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      MAIL_TO:    ${{ secrets.MAIL_TO }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -28,109 +32,37 @@ jobs:
       - name: Send test ShortCandidate signal to TG + Email
         run: |
           python - <<'PY'
-          import os, time, json, ssl, smtplib, requests
+          import os, time, ssl, smtplib, requests, json
           from email.mime.text import MIMEText
           from email.header import Header
 
-          TG_TOKEN = os.environ["TELEGRAM_TOKEN"]
-          TG_CHAT  = os.environ["TELEGRAM_CHAT_ID"]
+          # --- Telegram ---
+          TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+          TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
+          tg_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+          text = f"📢 Test ShortCandidate Signal\nTime: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())}"
+          r = requests.post(tg_url, data={"chat_id": TG_CHAT, "text": text}, timeout=20)
+          r.raise_for_status()
+          print("Telegram 消息发送成功 ✅")
 
-          # ===== 构造一张“做空候选信号卡” =====
-          card = {
-            "type": "ShortCandidate",
-            "version": "1.0",
-            "symbol": "TEST_USDT",
-            "market": "gate:USDT_PERP",
-            "detected_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "timeframe": "5m",
+          # --- Email ---
+          host = os.environ.get("SMTP_HOST")
+          port = int(os.environ.get("SMTP_PORT", "465"))
+          user = os.environ.get("SMTP_USER")
+          pwd = os.environ.get("SMTP_PASS")
+          to = os.environ.get("MAIL_TO")
 
-            "price": { "last": 1.23, "index": 1.20, "mark": 1.22, "high24h": 1.50, "low24h": 0.90 },
-            "momentum": { "chg_5m_pct": 8.0, "chg_15m_pct": 15.2, "chg_1h_pct": 32.5, "chg_24h_pct": 88.0 },
-            "volume": { "vol_5m_usdt": 1_000_000, "vol_spike_ratio": 4.0, "vol_24h_usdt": 50_000_000 },
-            "derivs": { "funding_rate_pct": 0.15, "funding_trend": "up", "open_interest_usdt": 20_000_000, "oi_change_30m_pct": 7.5, "basis_pct": 0.5 },
-            "ta": { "rsi_14": 82.0, "ema7_vs_ema25": "crossing_down", "wick_ratio": 2.0, "dist_to_24h_high_pct": -2.0, "new_24h_high": True },
-            "micro": { "depth_imbalance_pct": 18.0, "spread_bps": 2.1 },
-            "triggers": ["手工测试"],
-            "confidence_0to1": 0.90,
-            "links": {
-              "trade": "https://www.gate.io/zh/futures_trade/USDT/TEST_USDT",
-              "kline": "https://www.gate.io/zh/futures_market/TEST_USDT"
-            },
-            "raw_refs": {
-              "tickers": "/api/v4/futures/usdt/tickers",
-              "candles": "/api/v4/futures/usdt/candlesticks?contract=TEST_USDT&interval=5m&limit=200",
-              "funding": "/api/v4/futures/usdt/funding_rate?contract=TEST_USDT",
-              "contract": "/api/v4/futures/usdt/contracts/TEST_USDT"
-            }
-          }
+          if host and user and pwd and to:
+              msg = MIMEText(text, "plain", "utf-8")
+              msg["Subject"] = Header("📧 Test ShortCandidate Signal", "utf-8")
+              msg["From"] = user
+              msg["To"] = to
 
-          # 人类第一行（给你看），后面 JSON（给我看）
-          header_line = f"做空候选：{card['symbol']}"
-          payload = json.dumps(card, ensure_ascii=False, separators=(',',':'))
-- name: Send test ShortCandidate signal to TG + Email
-  run: |
-    python - <<'PY'
-    import os, time, json, ssl, smtplib, requests
-    from email.mime.text import MIMEText
-    from email.header import Header
-    from html import escape
-
-    # === 读取 Secrets ===
-    TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-    TG_CHAT  = os.environ.get("TELEGRAM_CHAT_ID")
-    print(f"[dbg] TG_TOKEN set: {bool(TG_TOKEN)}  TG_CHAT: {TG_CHAT!r}")
-
-    # ---- 0. 先发一条最简单的纯文本（如果这步都失败，就不是格式问题）----
-    tg_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    hello  = f"Test hello @ {time.strftime('%H:%M:%S', time.gmtime())}"
-    r = requests.post(tg_url, data={"chat_id": str(TG_CHAT), "text": hello}, timeout=20)
-    print("[dbg] plain text resp:", r.status_code, r.text[:200])
-    r.raise_for_status()
-
-    # ---- 1. 构造测试卡片 ----
-    card = {
-      "type":"ShortCandidate","version":"1.0",
-      "symbol":"TEST_USDT","market":"gate:USDT_PERP",
-      "detected_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-      "timeframe":"5m",
-      "price":{"last":1.23,"index":1.20,"mark":1.22,"high24h":1.50,"low24h":0.90},
-      "momentum":{"chg_5m_pct":8.0,"chg_15m_pct":15.2,"chg_1h_pct":32.5,"chg_24h_pct":88.0},
-      "volume":{"vol_5m_usdt":1_000_000,"vol_spike_ratio":4.0,"vol_24h_usdt":50_000_000},
-      "derivs":{"funding_rate_pct":0.15,"funding_trend":"up","open_interest_usdt":20_000_000,"oi_change_30m_pct":7.5,"basis_pct":0.5},
-      "ta":{"rsi_14":82.0,"ema7_vs_ema25":"crossing_down","wick_ratio":2.0,"dist_to_24h_high_pct":-2.0,"new_24h_high":True},
-      "micro":{"depth_imbalance_pct":18.0,"spread_bps":2.1},
-      "triggers":["手工测试"],"confidence_0to1":0.90
-    }
-    header_line = f"做空候选：{card['symbol']}"
-    payload = json.dumps(card, ensure_ascii=False, separators=(',',':'))
-
-    # ---- 2A. 安全的 HTML 代码块发送（优先）----
-    tg_text_html = header_line + "\n" + "<pre><code>" + escape(payload) + "</code></pre>"
-    r2 = requests.post(tg_url, data={"chat_id": str(TG_CHAT), "text": tg_text_html, "parse_mode":"HTML"}, timeout=20)
-    print("[dbg] html block resp:", r2.status_code, r2.text[:200])
-    r2.raise_for_status()
-
-    print("Telegram OK.")
-
-    # ================== Email（保持不变） ==================
-    host = os.environ.get("SMTP_HOST")
-    port = int(os.environ.get("SMTP_PORT", "465"))
-    user = os.environ.get("SMTP_USER")
-    pwd  = os.environ.get("SMTP_PASS")
-    to   = os.environ.get("MAIL_TO")
-
-    if host and user and pwd and to:
-      body = header_line + "\n\n" + payload
-      msg = MIMEText(body, "plain", "utf-8")
-      msg["Subject"] = Header("【测试】做空候选信号卡 ShortCandidate", "utf-8")
-      msg["From"] = user
-      msg["To"] = to
-      ctx = ssl.create_default_context()
-      with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as smtp:
-        smtp.login(user, pwd)
-        smtp.sendmail(user, [to], msg.as_string())
-      print("Email OK.")
-    else:
-      print("Email skipped: missing SMTP_* / MAIL_TO.")
-    PY
-          
+              ctx = ssl.create_default_context()
+              with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as smtp:
+                  smtp.login(user, pwd)
+                  smtp.sendmail(user, [to], msg.as_string())
+              print("Email 邮件发送成功 ✅")
+          else:
+              print("Email 未发送 ⚠️，请检查 SMTP_* 或 MAIL_TO secrets 是否配置正确。")
+          PY
