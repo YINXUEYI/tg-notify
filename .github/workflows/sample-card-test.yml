@@ -1,0 +1,144 @@
+name: Test ShortCandidate Sample
+
+on:
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  test-sample:
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Send SAMPLE ShortCandidate card to TG + Email
+        run: |
+          python - <<'PY'
+          import os, time, ssl, smtplib, json, requests
+          from email.mime.text import MIMEText
+          from email.header import Header
+
+          # ---------- 1) 构造“做空候选”示例卡片（假数据） ----------
+          ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+          card = {
+            "schema": "gate.short_candidate.v1",
+            "generated_at_utc": ts,
+            "symbol": "TEST_USDT",
+            "market": "futures",
+            "exchange": "gate",
+            "price": {
+              "last": 0.2412,
+              "index": 0.2410,
+              "mark": 0.2411,
+              "high24h": 0.2899,
+              "low24h": 0.2050
+            },
+            "momentum": {
+              "chg_5m_pct": -2.1,
+              "chg_15m_pct": -5.4,
+              "chg_1h_pct": -9.8,
+              "chg_4h_pct": -14.2,
+              "chg_24h_pct": +18.6
+            },
+            "volume": {
+              "vol_5m_usdt": 1_200_000,
+              "vol_24h_usdt": 86_000_000
+            },
+            "derivs": {
+              "funding_rate_pct": 0.18,
+              "funding_trend": "up",     # up/down/flat
+              "open_interest_usdt": 12_500_000
+            },
+            "tech": {
+              "rsi14": 82.0,
+              "ema7_vs_ema25": "below",  # above/below
+              "crossing_down": True,     # EMA7 下穿 EMA25
+              "wick_ratio": 3.2          # 上影线/实体 比
+            },
+            "micro": {
+              "depth_imbalance_pct": 22.0,  # 卖单>买单
+              "spread_bps": 2.3
+            },
+            "triggers": [
+              "bearish_divergence",
+              "ema7_cross_down_ema25",
+              "rsi_overbought"
+            ],
+            "risk_flags": [
+              "high_funding_positive",     # 正资金费率偏高
+              "index_mark_deviation_small" # 标记/指数偏差小
+            ],
+            "confidence_0to1": 0.86,
+            "links": {
+              "trade": "https://www.gate.io/zh/futures_trade/USDT/TEST_USDT",
+              "kline": "https://www.gate.io/zh/futures_market/TEST_USDT"
+            },
+            "raw_refs": {
+              "tickers":   "/api/v4/futures/usdt/tickers",
+              "candles":   "/api/v4/futures/usdt/candlesticks?contract=TEST_USDT",
+              "funding":   "/api/v4/futures/usdt/funding_rate?contract=TEST_USDT",
+              "contract":  "/api/v4/futures/usdt/contracts/TEST_USDT"
+            }
+          }
+
+          payload = json.dumps(card, ensure_ascii=False, separators=(',', ':'))
+
+          # ---------- 2) Telegram ----------
+          TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+          TG_CHAT  = os.environ.get("TELEGRAM_CHAT_ID")
+          tg_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+
+          # 先发一条 hello，确认触达
+          hello = f"📢 SAMPLE ShortCandidate Card\nTime: {ts}\nSymbol: {card['symbol']}"
+          r1 = requests.post(tg_url, data={"chat_id": TG_CHAT, "text": hello}, timeout=20)
+          r1.raise_for_status()
+
+          # 再发 JSON（为避免转义问题，走普通文本，不设置 parse_mode）
+          if len(payload) <= 3500:
+              text_json = "JSON👇\n" + payload
+              r2 = requests.post(tg_url, data={"chat_id": TG_CHAT, "text": text_json}, timeout=20)
+              r2.raise_for_status()
+          else:
+              # 如果太长，截断提示（我们后续可改为 sendDocument 上传 .json 文件）
+              r2 = requests.post(tg_url, data={"chat_id": TG_CHAT, "text": "JSON too long, truncated.\n"+payload[:3000]}, timeout=20)
+              r2.raise_for_status()
+
+          print("Telegram ✅ sent")
+
+          # ---------- 3) Email ----------
+          host = os.environ.get("SMTP_HOST")
+          port = int(os.environ.get("SMTP_PORT", "465"))
+          user = os.environ.get("SMTP_USER")
+          pwd  = os.environ.get("SMTP_PASS")
+          to   = os.environ.get("MAIL_TO")
+
+          if host and user and pwd and to:
+              body = hello + "\n\n" + payload
+              msg = MIMEText(body, "plain", "utf-8")
+              msg["Subject"] = Header("📧 SAMPLE ShortCandidate Card", "utf-8")
+              msg["From"] = user
+              msg["To"] = to
+              ctx = ssl.create_default_context()
+              with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as smtp:
+                  smtp.login(user, pwd)
+                  smtp.sendmail(user, [to], msg.as_string())
+              print("Email ✅ sent")
+          else:
+              print("Email ⚠️ skipped, check SMTP_* / MAIL_TO secrets")
+
+          PY
