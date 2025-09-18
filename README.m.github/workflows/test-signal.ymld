@@ -1,0 +1,99 @@
+name: Test ShortCandidate Signal (手动)
+
+on:
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  test-signal:
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      MAIL_TO:    ${{ secrets.MAIL_TO }}
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Send test ShortCandidate signal to TG + Email
+        run: |
+          python - <<'PY'
+          import os, time, json, ssl, smtplib, requests
+          from email.mime.text import MIMEText
+          from email.header import Header
+
+          TG_TOKEN = os.environ["TELEGRAM_TOKEN"]
+          TG_CHAT  = os.environ["TELEGRAM_CHAT_ID"]
+
+          # ===== 构造一张“做空候选信号卡” =====
+          card = {
+            "type": "ShortCandidate",
+            "version": "1.0",
+            "symbol": "TEST_USDT",
+            "market": "gate:USDT_PERP",
+            "detected_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "timeframe": "5m",
+
+            "price": { "last": 1.23, "index": 1.20, "mark": 1.22, "high24h": 1.50, "low24h": 0.90 },
+            "momentum": { "chg_5m_pct": 8.0, "chg_15m_pct": 15.2, "chg_1h_pct": 32.5, "chg_24h_pct": 88.0 },
+            "volume": { "vol_5m_usdt": 1_000_000, "vol_spike_ratio": 4.0, "vol_24h_usdt": 50_000_000 },
+            "derivs": { "funding_rate_pct": 0.15, "funding_trend": "up", "open_interest_usdt": 20_000_000, "oi_change_30m_pct": 7.5, "basis_pct": 0.5 },
+            "ta": { "rsi_14": 82.0, "ema7_vs_ema25": "crossing_down", "wick_ratio": 2.0, "dist_to_24h_high_pct": -2.0, "new_24h_high": True },
+            "micro": { "depth_imbalance_pct": 18.0, "spread_bps": 2.1 },
+            "triggers": ["手工测试"],
+            "confidence_0to1": 0.90,
+            "links": {
+              "trade": "https://www.gate.io/zh/futures_trade/USDT/TEST_USDT",
+              "kline": "https://www.gate.io/zh/futures_market/TEST_USDT"
+            },
+            "raw_refs": {
+              "tickers": "/api/v4/futures/usdt/tickers",
+              "candles": "/api/v4/futures/usdt/candlesticks?contract=TEST_USDT&interval=5m&limit=200",
+              "funding": "/api/v4/futures/usdt/funding_rate?contract=TEST_USDT",
+              "contract": "/api/v4/futures/usdt/contracts/TEST_USDT"
+            }
+          }
+
+          # 人类第一行（给你看），后面 JSON（给我看）
+          header_line = f"做空候选：{card['symbol']}"
+          payload = json.dumps(card, ensure_ascii=False, separators=(',',':'))
+
+          # ===== Telegram =====
+          tg_text = header_line + "\n```\n" + payload + "\n```"
+          tg_url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+          tr = requests.post(tg_url, data={"chat_id": TG_CHAT, "text": tg_text, "parse_mode": "Markdown"}, timeout=20)
+          tr.raise_for_status()
+          print("Telegram 测试信号已发送。")
+
+          # ===== Email =====
+          host = os.environ.get("SMTP_HOST")
+          port = int(os.environ.get("SMTP_PORT", "465"))
+          user = os.environ.get("SMTP_USER")
+          pwd  = os.environ.get("SMTP_PASS")
+          to   = os.environ.get("MAIL_TO")
+
+          if host and user and pwd and to:
+            body = header_line + "\n\n" + payload
+            msg = MIMEText(body, "plain", "utf-8")
+            msg["Subject"] = Header("【测试】做空候选信号卡 ShortCandidate", "utf-8")
+            msg["From"] = user
+            msg["To"] = to
+
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as smtp:
+              smtp.login(user, pwd)
+              smtp.sendmail(user, [to], msg.as_string())
+            print("Email 测试信号已发送。")
+          else:
+            print("Email 未发送：缺少 SMTP_* 或 MAIL_TO secrets。")
+          PY
